@@ -85,8 +85,8 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		renderCallbackManager.register(this);
 		if (!hiddenObjectIds.isEmpty())
 		{
-			// Invalidate all zones so they re-bake with our filter active
-			clientThread.invokeLater(this::invalidateAllZones);
+			// Invalidate only zones containing hidden objects (safe — those zones are initialized)
+			clientThread.invokeLater(this::invalidateHiddenObjectZones);
 		}
 	}
 
@@ -94,9 +94,13 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 	protected void shutDown()
 	{
 		renderCallbackManager.unregister(this);
-		// Invalidate all zones to restore hidden objects
-		clientThread.invokeLater(this::invalidateAllZones);
+		// Capture IDs before clearing so we can restore the correct zones
+		Set<Integer> toRestore = new HashSet<>(hiddenObjectIds);
 		hiddenObjectIds.clear();
+		if (!toRestore.isEmpty())
+		{
+			clientThread.invokeLater(() -> invalidateZonesForIds(toRestore));
+		}
 	}
 
 	// --- RenderCallback ---
@@ -277,12 +281,17 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 	}
 
 	/**
-	 * Scans the scene for all tile objects with the given ID and invalidates their zones,
-	 * forcing the GPU to re-bake those zones (calling {@link #drawObject} for each object).
+	 * Scans the scene for tile objects matching any of the given IDs and invalidates their zones.
+	 * Only zones where we actually find a matching object are invalidated — those zones are
+	 * guaranteed to be initialized by the GPU, avoiding the {@code assert zone.initialized} crash.
 	 */
-	private void invalidateZonesForId(int objectId)
+	private void invalidateZonesForIds(Set<Integer> objectIds)
 	{
 		assert client.isClientThread();
+		if (objectIds.isEmpty())
+		{
+			return;
+		}
 		WorldView wv = client.getTopLevelWorldView();
 		if (wv == null)
 		{
@@ -299,15 +308,23 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		Tile[][][] tiles = scene.getTiles();
 		for (Tile[][] plane : tiles)
 		{
+			if (plane == null)
+			{
+				continue;
+			}
 			for (Tile[] col : plane)
 			{
+				if (col == null)
+				{
+					continue;
+				}
 				for (Tile tile : col)
 				{
 					if (tile == null)
 					{
 						continue;
 					}
-					TileObject found = findObjectOnTile(tile, objectId);
+					TileObject found = findAnyObjectOnTile(tile, objectIds);
 					if (found != null)
 					{
 						invalidateZoneForObject(scene, dc, found, done);
@@ -317,32 +334,16 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		}
 	}
 
-	/**
-	 * Invalidates all zones in the scene, used on startup/shutdown to force full re-bake.
-	 */
-	private void invalidateAllZones()
+	/** Convenience overload for a single object ID. */
+	private void invalidateZonesForId(int objectId)
 	{
-		assert client.isClientThread();
-		WorldView wv = client.getTopLevelWorldView();
-		if (wv == null)
-		{
-			return;
-		}
-		Scene scene = wv.getScene();
-		DrawCallbacks dc = client.getDrawCallbacks();
-		if (dc == null)
-		{
-			return;
-		}
+		invalidateZonesForIds(Set.of(objectId));
+	}
 
-		int numZones = Constants.EXTENDED_SCENE_SIZE >> 3;
-		for (int zx = 0; zx < numZones; zx++)
-		{
-			for (int zz = 0; zz < numZones; zz++)
-			{
-				dc.invalidateZone(scene, zx, zz);
-			}
-		}
+	/** Invalidates zones for all currently hidden object IDs (used on startup). */
+	private void invalidateHiddenObjectZones()
+	{
+		invalidateZonesForIds(new HashSet<>(hiddenObjectIds));
 	}
 
 	private void invalidateZoneForObject(Scene scene, DrawCallbacks dc, TileObject obj, Set<Long> done)
@@ -361,20 +362,20 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		}
 	}
 
-	private TileObject findObjectOnTile(Tile tile, int objectId)
+	private TileObject findAnyObjectOnTile(Tile tile, Set<Integer> objectIds)
 	{
 		WallObject wo = tile.getWallObject();
-		if (wo != null && wo.getId() == objectId)
+		if (wo != null && objectIds.contains(wo.getId()))
 		{
 			return wo;
 		}
 		DecorativeObject deco = tile.getDecorativeObject();
-		if (deco != null && deco.getId() == objectId)
+		if (deco != null && objectIds.contains(deco.getId()))
 		{
 			return deco;
 		}
 		GroundObject ground = tile.getGroundObject();
-		if (ground != null && ground.getId() == objectId)
+		if (ground != null && objectIds.contains(ground.getId()))
 		{
 			return ground;
 		}
@@ -383,7 +384,7 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		{
 			for (GameObject go : gos)
 			{
-				if (go != null && go.getId() == objectId)
+				if (go != null && objectIds.contains(go.getId()))
 				{
 					return go;
 				}
@@ -435,10 +436,10 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 		{
 			parseHiddenObjectIds();
 		}
-		// When reveal mode toggles, invalidate all zones so objects appear/disappear
+		// When reveal mode toggles, invalidate only zones with hidden objects
 		if (Objects.equals(event.getKey(), "revealHidden"))
 		{
-			clientThread.invokeLater(this::invalidateAllZones);
+			clientThread.invokeLater(this::invalidateHiddenObjectZones);
 		}
 	}
 }
