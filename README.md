@@ -1,0 +1,1 @@
+This plugin allows the user to hide game objects by right clicking them with the configuration option set. To unhide, there is an option in the configuration to reveal all hidden objects so that you can right click them to unhide.
