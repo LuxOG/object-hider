@@ -404,7 +404,7 @@ public class ObjectHiderPlugin extends Plugin implements RenderCallback
 	private void parseHiddenObjectIds()
 	{
 		hiddenObjectIds.clear();
-		String raw = config.hiddenObjectIds();
+		String raw = configManager.getConfiguration(ObjectHiderConfig.GROUP, "hiddenObjectIds");
 		if (raw == null || raw.trim().isEmpty())
 		{
 			return;
